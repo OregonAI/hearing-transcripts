@@ -13,13 +13,16 @@ The transcripts are machine transcripts of the official recordings. They are not
 
 ## What is here
 
-- **download**: takes Invintus event IDs, writes MP3s to a working folder, and records what it fetched so nothing is
+- **download** (added with the downloader, ticket #131): takes Invintus event IDs, writes MP3s to a working folder, and records what it fetched so nothing is
   fetched twice.
 - **transcribe** (a later ticket): turns each MP3 into a transcript file, then deletes the MP3.
 
 It never touches SessionGateway's database.
 
-## The downloader's rules (enforced in code)
+## The downloader's rules (added with the downloader)
+
+The downloader is not on `main` yet; it arrives with ticket #131. These are the rules it must enforce in code, and the
+branch's README states what it enforces and what stays with the operator.
 
 - Runs only between 00:00 and 06:00 Pacific. Outside that window it refuses to start.
 - One request at a time, about 3 seconds apart.
@@ -33,7 +36,7 @@ It never touches SessionGateway's database.
 
 Runs are approved by the owner one at a time and happen from the GPU desktop.
 
-## Running it (operator)
+## Running it (operator) (added with the downloader)
 
 The operator supplies the configuration in the environment. Nothing below is committed in this repository.
 
