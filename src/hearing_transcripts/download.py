@@ -13,10 +13,11 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -41,11 +42,11 @@ class Halt(Exception):
 
 
 class InvalidEventId(ValueError):
-    """An event ID that is not digits only."""
+    """An event ID that is not digits only. Checked before anything is requested or written."""
 
 
 class RecordCorrupt(Halt):
-    """The record file is damaged."""
+    """The record file is damaged (for example a torn last line). The run fails closed and waits for the owner."""
 
 
 class OutsideWindow(Exception):
@@ -55,7 +56,7 @@ class OutsideWindow(Exception):
 @dataclass(frozen=True)
 class Config:
     base_url: str
-    api_key: str
+    api_key: str = field(repr=False)
     client_id: str = "4879615486"
 
 
@@ -182,14 +183,39 @@ def _audio_url(event_id: str, config: Config, pacer: _Pacer) -> str:
     return url
 
 
+_EVENT_ID = re.compile(r"[0-9]+")  # ASCII digits only: no path characters, no Unicode digits
+
+
+def _check_event_ids(event_ids: list[str]) -> None:
+    for event_id in event_ids:
+        if not _EVENT_ID.fullmatch(event_id):
+            raise InvalidEventId(f"event ID {event_id!r} is not digits only; nothing was requested")
+
+
 def _fetched_ids(record: Path) -> set[str]:
+    """The ids in the record file. A line that is not a record (a torn last line, say) fails closed."""
     if not record.exists():
         return set()
-    return {json.loads(line)["event_id"] for line in record.read_text().splitlines() if line.strip()}
+    ids: set[str] = set()
+    for number, line in enumerate(record.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            event_id = json.loads(line)["event_id"]
+            if not isinstance(event_id, str):
+                raise TypeError
+        except (ValueError, KeyError, TypeError):
+            raise RecordCorrupt(
+                f"{record} line {number} is not a valid record ({line[:60]!r}); refusing to run, "
+                "nothing was requested. The file is untouched."
+            ) from None
+        ids.add(event_id)
+    return ids
 
 
 def run_download(event_ids: list[str], config: Config, workdir: Path, clock: Clock) -> list[str]:
     """Fetch each event's MP3 once. Returns the ids fetched in this run."""
+    _check_event_ids(event_ids)
     _check_window(clock)  # refuse to start outside the window
     pacer = _Pacer(clock)
     workdir.mkdir(parents=True, exist_ok=True)

@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .clock import Clock, SystemClock
-from .download import Config, Halt, OutsideWindow, run_download
+from .download import Config, Halt, InvalidEventId, OutsideWindow, run_download
 
 
 def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = None, clock: Clock | None = None) -> int:
@@ -30,6 +30,9 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     config = Config(base_url=base_url, api_key=key, client_id=env.get("HEARING_CLIENT_ID", "4879615486"))
     try:
         fetched = run_download(args.event_ids, config, args.workdir, clock)
+    except InvalidEventId as err:
+        print(str(err), file=sys.stderr)
+        return 1
     except OutsideWindow as err:
         print(str(err), file=sys.stderr)
         return 3
