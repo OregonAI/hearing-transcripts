@@ -40,6 +40,14 @@ class Halt(Exception):
     """The run stopped and waits for the owner. Nothing retries around it."""
 
 
+class InvalidEventId(ValueError):
+    """An event ID that is not digits only."""
+
+
+class RecordCorrupt(Halt):
+    """The record file is damaged."""
+
+
 class OutsideWindow(Exception):
     """The run was started outside 00:00-06:00 Pacific."""
 
