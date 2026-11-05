@@ -106,17 +106,17 @@ class _Pacer:
 
     def __init__(self, clock: Clock) -> None:
         self.clock = clock
-        self.last: datetime | None = None
+        self.last: float | None = None  # a monotonic reading, so a wall-clock step cannot change the pacing
 
     def before_request(self) -> None:
         if self.last is not None:
-            wait = PACE_SECONDS - (self.clock.now() - self.last).total_seconds()
+            wait = PACE_SECONDS - (self.clock.monotonic() - self.last)
             if wait > 0:
                 self.clock.sleep(wait)
         _check_window(self.clock)  # after the wait, so a run never sends a request outside the window
 
     def after_request(self) -> None:
-        self.last = self.clock.now()
+        self.last = self.clock.monotonic()
 
 
 def _open(req: urllib.request.Request, what: str, pacer: _Pacer, read: Callable[[http.client.HTTPResponse], T]) -> T:
