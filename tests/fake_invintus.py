@@ -25,12 +25,36 @@ def audio_bytes(event_id: str) -> bytes:
     return b"ID3-fake-mp3-for-" + event_id.encode()
 
 
+def http_response(
+    body: bytes,
+    *,
+    status: str = "200 OK",
+    ctype: str | None = "audio/mpeg",
+    length: int | None | str = "auto",
+) -> bytes:
+    """Raw bytes of a whole HTTP/1.0 reply, for replies the normal handler would never send.
+
+    `length="auto"` sends the true Content-Length, `None` sends none, an int sends that (so a short body is a truncation).
+    """
+    lines = [f"HTTP/1.0 {status}"]
+    if ctype is not None:
+        lines.append(f"Content-Type: {ctype}")
+    if length == "auto":
+        lines.append(f"Content-Length: {len(body)}")
+    elif length is not None:
+        lines.append(f"Content-Length: {length}")
+    return ("\r\n".join(lines) + "\r\n\r\n").encode() + body
+
+
 @dataclass
 class FakeInvintus:
     # event id -> (status, body bytes) to send instead of the normal getDetailed reply
     detail_override: dict[str, tuple[int, bytes]] = field(default_factory=dict)
     # event id -> (status, body bytes) to send instead of the MP3
     media_override: dict[str, tuple[int, bytes]] = field(default_factory=dict)
+    # event id -> the exact bytes to write to the socket instead of any reply (garbage, truncation, no length)
+    detail_raw: dict[str, bytes] = field(default_factory=dict)
+    media_raw: dict[str, bytes] = field(default_factory=dict)
     # event id -> audio URI path to advertise instead of the normal one
     audio_path_override: dict[str, str] = field(default_factory=dict)
     seen: list[Seen] = field(default_factory=list)
@@ -60,6 +84,8 @@ class FakeInvintus:
                 if self.path != "/Event/getDetailed":
                     return self._send(404, b"{}", "application/json")
                 event_id = str(json.loads(body)["eventID"])
+                if event_id in fake.detail_raw:
+                    return self.wfile.write(fake.detail_raw[event_id])
                 if event_id in fake.detail_override:
                     status, payload = fake.detail_override[event_id]
                     return self._send(status, payload, "application/json")
@@ -79,6 +105,8 @@ class FakeInvintus:
                 self._record()
                 name = self.path.rsplit("/", 1)[-1]
                 event_id = name.removesuffix(".mp4").removesuffix(".mp3").removesuffix("_audio")
+                if event_id in fake.media_raw:
+                    return self.wfile.write(fake.media_raw[event_id])
                 if event_id in fake.media_override:
                     status, payload = fake.media_override[event_id]
                     return self._send(status, payload, "text/plain")
