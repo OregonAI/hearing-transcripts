@@ -53,3 +53,13 @@ def test_ci_clears_the_proxy_variables():
     workflow = (Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml").read_text()
     for var in ("http_proxy", "https_proxy", "all_proxy"):
         assert f'{var}: ""' in workflow
+
+
+@pytest.mark.parametrize("host", ["example.invalid", "media.example.invalid", "192.0.2.1", "::2"])
+def test_name_lookups_for_anything_but_loopback_raise_too(host):
+    with pytest.raises(NetworkBlocked, match="blocked"):
+        socket.getaddrinfo(host, 443)
+
+
+def test_loopback_lookups_still_work():
+    assert socket.getaddrinfo("127.0.0.1", 80)
