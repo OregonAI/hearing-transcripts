@@ -92,7 +92,10 @@ def preload_cuda_libraries() -> None:
                               ("nvidia.cudnn", ("libcudnn_ops.so.9", "libcudnn_cnn.so.9", "libcudnn_adv.so.9", "libcudnn_graph.so.9",
                                                 "libcudnn_engines_runtime_compiled.so.9", "libcudnn_engines_precompiled.so.9",
                                                 "libcudnn_heuristic.so.9", "libcudnn.so.9"))):
-        spec = importlib.util.find_spec(package)
+        try:
+            spec = importlib.util.find_spec(package)  # imports the parent package, so a missing `nvidia` raises here
+        except ModuleNotFoundError:
+            spec = None
         if spec is None or not spec.submodule_search_locations:
             raise CudaUnavailable(f"{package} is not installed; install the CUDA wheels with `uv sync --extra gpu`")
         lib_dir = Path(next(iter(spec.submodule_search_locations))) / "lib"
