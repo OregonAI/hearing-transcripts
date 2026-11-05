@@ -62,14 +62,23 @@ class FakeClock:
 
     def __init__(self, start: datetime) -> None:
         self.current = start
+        self.elapsed = 1000.0  # the monotonic reading; only real waiting moves it
         self.sleeps: list[float] = []
 
     def now(self) -> datetime:
         return self.current
 
+    def monotonic(self) -> float:
+        return self.elapsed
+
     def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
         self.current += timedelta(seconds=seconds)
+        self.elapsed += seconds
+
+    def jump_wall_clock(self, delta: timedelta) -> None:
+        """A step of the wall clock (NTP, a manual change) that no time really passed for."""
+        self.current += delta
 
 
 @pytest.fixture

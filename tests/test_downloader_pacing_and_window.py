@@ -76,7 +76,8 @@ def test_the_window_is_pacific_time_across_the_daylight_saving_change(fake, tmp_
 
 
 def test_a_run_that_passes_six_stops_before_the_next_request(fake, tmp_path):
-    # Starts at 05:59:50; the 3 s pauses carry it past 06:00 during the first event.
+    # Starts at 05:59:56. The first event's two requests (05:59:56 and, after a 3 s pause, 05:59:59) are inside the
+    # window; the 3 s pause before the second event's first request would land at 06:00:02, so that request is refused.
     clock = FakeClock(datetime(2026, 11, 10, 5, 59, 56, tzinfo=PACIFIC))
 
     with pytest.raises(OutsideWindow):
@@ -84,3 +85,32 @@ def test_a_run_that_passes_six_stops_before_the_next_request(fake, tmp_path):
 
     assert all(b"2026010002" not in s.body and "2026010002" not in s.path for s in fake.seen)
     assert (tmp_path / "2026010001.mp3").exists()
+
+
+def test_pacing_follows_the_monotonic_clock_not_the_wall_clock():
+    from datetime import timedelta
+
+    from hearing_transcripts.download import _Pacer
+
+    clock = FakeClock(datetime(2026, 11, 10, 2, 0, tzinfo=PACIFIC))
+    pacer = _Pacer(clock)
+    pacer.after_request()
+
+    clock.jump_wall_clock(timedelta(minutes=30))  # forward step: a wall-clock pacer would think 30 minutes passed
+    pacer.before_request()
+    assert clock.sleeps == [3.0]
+
+    pacer.after_request()
+    clock.jump_wall_clock(timedelta(minutes=-30))  # backward step: a wall-clock pacer would sleep for half an hour
+    pacer.before_request()
+    assert clock.sleeps == [3.0, 3.0]
+
+
+def test_the_system_clock_reads_time_monotonic():
+    import time
+
+    from hearing_transcripts.clock import SystemClock
+
+    before = time.monotonic()
+    reading = SystemClock().monotonic()
+    assert before <= reading <= time.monotonic()
