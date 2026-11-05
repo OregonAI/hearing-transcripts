@@ -25,13 +25,8 @@ jobs:
       # The only network use is installing dependencies. The tests talk to a local fake server; no GPU.
       - run: uv sync --locked
       # No proxy may carry anything, and conftest.py blocks every connect but 127.0.0.1 and ::1.
-      - run: uv run pytest
-        env:
-          http_proxy: ""
-          https_proxy: ""
-          all_proxy: ""
-          no_proxy: ""
-          HTTP_PROXY: ""
-          HTTPS_PROXY: ""
-          ALL_PROXY: ""
-          NO_PROXY: ""
+      # Unset in the shell, not under env: Actions treats env keys case-insensitively, so
+      # http_proxy and HTTP_PROXY there are one key defined twice and the workflow is invalid.
+      - run: |
+          unset http_proxy https_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
+          uv run pytest

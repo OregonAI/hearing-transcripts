@@ -51,8 +51,30 @@ def test_proxy_environment_variables_are_cleared_for_the_session():
 
 def test_ci_clears_the_proxy_variables():
     workflow = (Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml").read_text()
-    for var in ("http_proxy", "https_proxy", "all_proxy"):
-        assert f'{var}: ""' in workflow
+    unset_lines = [line.split() for line in workflow.splitlines() if line.strip().startswith("unset ")]
+    assert unset_lines, "ci.yml unsets no proxy variables"
+    for var in ("http_proxy", "https_proxy", "all_proxy", "no_proxy"):
+        for name in (var, var.upper()):
+            assert any(name in words for words in unset_lines), f"ci.yml does not unset {name}"
+
+
+def test_ci_sets_no_env_key_twice_ignoring_case():
+    # Actions treats env keys case-insensitively: http_proxy and HTTP_PROXY under one env block make the workflow invalid.
+    workflow = (Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml").read_text()
+    blocks, current = [], None
+    for line in workflow.splitlines():
+        stripped = line.strip()
+        if stripped == "env:":
+            current = (len(line) - len(line.lstrip()), [])
+            blocks.append(current)
+        elif current is not None:
+            indent = len(line) - len(line.lstrip())
+            if stripped and indent > current[0] and ":" in stripped:
+                current[1].append(stripped.split(":", 1)[0].strip().lower())
+            elif stripped and indent <= current[0]:
+                current = None
+    for _, keys in blocks:
+        assert len(keys) == len(set(keys)), f"env keys repeat ignoring case: {keys}"
 
 
 @pytest.mark.parametrize("host", ["example.invalid", "media.example.invalid", "192.0.2.1", "::2"])
