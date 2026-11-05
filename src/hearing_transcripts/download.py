@@ -12,15 +12,20 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import os
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
+from typing import TypeVar
 from zoneinfo import ZoneInfo
 
 from .clock import Clock
+
+T = TypeVar("T")
 
 USER_AGENT = "SessionGateway-transcripts/1 (+https://github.com/OregonAI/SessionGateway)"
 RECORD_FILE = "fetched.jsonl"
@@ -84,23 +89,61 @@ class _Pacer:
         self.last = self.clock.now()
 
 
-def _request(req: urllib.request.Request, what: str, pacer: _Pacer) -> tuple[int, bytes]:
-    """One request. Any answer that is not a 200 halts; there is no retry."""
+def _open(req: urllib.request.Request, what: str, pacer: _Pacer, read: Callable[[http.client.HTTPResponse], T]) -> T:
+    """One request. Any answer that is not a 200 halts; there is no retry. `read` consumes the reply."""
     pacer.before_request()
     req.add_header("User-Agent", USER_AGENT)
     try:
         try:
             with _opener.open(req, timeout=TIMEOUT_SECONDS) as resp:
-                status, body = resp.status, resp.read()
+                if resp.status != 200:
+                    raise Halt(f"{what}: the server answered {resp.status}; halting, no retry")
+                return read(resp)
         finally:
             pacer.after_request()
     except urllib.error.HTTPError as err:
         raise Halt(f"{what}: the server answered {err.code}; halting, no retry") from None
     except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as err:
-        raise Halt(f"{what}: no usable answer ({err}); halting, no retry") from None
-    if status != 200:
-        raise Halt(f"{what}: the server answered {status}; halting, no retry")
-    return status, body
+        raise Halt(f"{what}: no usable answer ({err!r}); halting, no retry") from None
+
+
+def _is_mp3_start(head: bytes) -> bool:
+    """An ID3v2 tag, or an MPEG audio frame sync (eleven set bits)."""
+    return head[:3] == b"ID3" or (len(head) >= 2 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0)
+
+
+def _save_mp3(resp: http.client.HTTPResponse, what: str, part: Path) -> tuple[str, int]:
+    """Check the reply and write it to `part`, synced. Returns (sha256, bytes). Halts on anything but a whole MP3."""
+    ctype = resp.headers.get_content_type()
+    if not ctype.startswith("audio/"):
+        raise Halt(f"{what}: the reply is {ctype!r}, not audio; halting, no retry")
+    length = resp.headers.get("Content-Length", "").strip()
+    if not length.isdigit():
+        raise Halt(f"{what}: the reply has no usable Content-Length; halting, no retry")
+    digest, size, first = hashlib.sha256(), 0, True
+    with part.open("wb") as fh:
+        while chunk := resp.read(1 << 20):
+            if first:
+                if not _is_mp3_start(chunk):
+                    raise Halt(f"{what}: the body does not start like an MP3; halting, no retry")
+                first = False
+            fh.write(chunk)
+            digest.update(chunk)
+            size += len(chunk)
+        if size == 0:
+            raise Halt(f"{what}: the body is empty; halting, no retry")
+        if size != int(length):
+            raise Halt(f"{what}: got {size} bytes but Content-Length said {length}; halting, no retry")
+        fh.flush()
+        os.fsync(fh.fileno())
+    return digest.hexdigest(), size
+
+
+def _request(req: urllib.request.Request, what: str, pacer: _Pacer) -> tuple[int, bytes]:
+    def read(resp: http.client.HTTPResponse) -> tuple[int, bytes]:
+        return resp.status, resp.read()
+
+    return _open(req, what, pacer, read)
 
 
 def _audio_url(event_id: str, config: Config, pacer: _Pacer) -> str:
@@ -149,11 +192,19 @@ def run_download(event_ids: list[str], config: Config, workdir: Path, clock: Clo
         if event_id in done:
             continue
         url = _audio_url(event_id, config, pacer)
-        _, audio = _request(urllib.request.Request(url, method="GET"), f"event {event_id} MP3", pacer)
-        (workdir / f"{event_id}.mp3").write_bytes(audio)
-        entry = {"event_id": event_id, "sha256": hashlib.sha256(audio).hexdigest(), "bytes": len(audio)}
-        with record.open("a") as fh:
+        what = f"event {event_id} MP3"
+        part, final = workdir / f"{event_id}.mp3.part", workdir / f"{event_id}.mp3"
+        try:
+            sha256, size = _open(urllib.request.Request(url, method="GET"), what, pacer, lambda r: _save_mp3(r, what, part))
+            os.replace(part, final)  # the file is whole and synced; only now is it kept
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
+        entry = {"event_id": event_id, "sha256": sha256, "bytes": size}
+        with record.open("a") as fh:  # recorded only after the file is complete
             fh.write(json.dumps(entry) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
         done.add(event_id)
         fetched.append(event_id)
     return fetched
