@@ -1,10 +1,14 @@
-"""The downloader. Its rules are code, not convention (SessionGateway ADR-0051):
+"""The downloader. What the code enforces (SessionGateway ADR-0051):
 
-- one request at a time, about 3 s apart, only inside 00:00-06:00 Pacific;
-- each event fetched once (the record file `fetched.jsonl` in the working folder);
-- MP3 only, never MP4;
-- the exact User-Agent below on every request;
-- the first 401, 403, 429 or any unexpected reply halts the run, with no retry.
+- only between 00:00 and 06:00 Pacific; one request at a time, about 3 s apart (monotonic clock);
+- each event fetched once (the record file `fetched.jsonl` in the working folder; a damaged record fails closed);
+- MP3 only, never MP4: the address must be https on the expected download host and end in .mp3, and the reply must be
+  audio with a matching Content-Length and an MP3 start, written to `<id>.mp3.part`, synced, then renamed;
+- the exact User-Agent below on every request; no proxies, no redirects;
+- the first 401, 403, 429, any other unexpected reply or any http.client error halts the run, with no retry.
+
+What it does not enforce, because only the operator can: one-time backfill, 2026R1 committee recordings only, runs from
+the GPU desktop, and the owner approving each run.
 """
 
 from __future__ import annotations

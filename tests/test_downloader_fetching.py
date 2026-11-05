@@ -103,6 +103,11 @@ def test_a_refusal_for_the_mp3_halts_with_no_retry(status, fake, clock, tmp_path
         (200, b"not json"),
         (200, b'{"data": {}}'),
         (200, b'{"data": {"downloadLinks": {"audioDownloadURI": ""}}}'),
+        (200, b'{"downloadLinks": {"audioDownloadURI": "http://x/y.mp3"}}'),  # fields not wrapped in `data`: today's parser halts
+        (200, b'{"data": {"downloadLinks": {"audioDownloadURI": 123}}}'),
+        (200, b'{"data": {"downloadLinks": null}}'),
+        (200, b"[]"),
+        (200, b"null"),
     ],
 )
 def test_an_unexpected_reply_halts_with_no_retry(status, body, fake, clock, tmp_path):
