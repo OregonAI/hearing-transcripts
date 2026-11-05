@@ -5,10 +5,11 @@
 - MP3 only, never MP4: the address must be https on the expected download host and end in .mp3, and the reply must be
   audio with a matching Content-Length and an MP3 start, written to `<id>.mp3.part`, synced, then renamed;
 - the exact User-Agent below on every request; no proxies, no redirects;
-- the first 401, 403, 429, any other unexpected reply or any http.client error halts the run, with no retry.
+- the first 401, 403, 429, any other unexpected reply or any http.client error halts the run, with no retry, and a
+  halt writes the marker `HALTED.json`; while it exists every run refuses before any request (the owner clears it).
 
 What it does not enforce, because only the operator can: one-time backfill, 2026R1 committee recordings only, runs from
-the GPU desktop, and the owner approving each run.
+the GPU desktop (the command line requires `--approved-run`).
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ T = TypeVar("T")
 
 USER_AGENT = "SessionGateway-transcripts/1 (+https://github.com/OregonAI/SessionGateway)"
 RECORD_FILE = "fetched.jsonl"
+HALT_MARKER = "HALTED.json"
 TIMEOUT_SECONDS = 120
 PACE_SECONDS = 3.0
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -42,7 +44,10 @@ WINDOW_END_HOUR = 6  # 06:00 Pacific, exclusive
 
 
 class Halt(Exception):
-    """The run stopped and waits for the owner. Nothing retries around it."""
+    """The run stopped and waits for the owner. Nothing retries around it. `request` names the request that was
+    being made (set where it is known; run_download fills it in otherwise) for the halt marker."""
+
+    request: str | None = None
 
 
 class InvalidEventId(ValueError):
@@ -51,6 +56,10 @@ class InvalidEventId(ValueError):
 
 class RecordCorrupt(Halt):
     """The record file is damaged (for example a torn last line). The run fails closed and waits for the owner."""
+
+
+class HaltMarkerPresent(Exception):
+    """An earlier run halted and left the marker. Nothing runs, and nothing is requested, until the owner clears it."""
 
 
 class OutsideWindow(Exception):
@@ -123,6 +132,12 @@ class _Pacer:
         self.last = self.clock.monotonic()
 
 
+def _halt(request: str, message: str) -> Halt:
+    err = Halt(message)
+    err.request = request
+    return err
+
+
 def _open(req: urllib.request.Request, what: str, pacer: _Pacer, read: Callable[[http.client.HTTPResponse], T]) -> T:
     """One request. Any answer that is not a 200 halts; there is no retry. `read` consumes the reply."""
     pacer.before_request()
@@ -136,9 +151,12 @@ def _open(req: urllib.request.Request, what: str, pacer: _Pacer, read: Callable[
         finally:
             pacer.after_request()
     except urllib.error.HTTPError as err:
-        raise Halt(f"{what}: the server answered {err.code}; halting, no retry") from None
+        raise _halt(what, f"{what}: the server answered {err.code}; halting, no retry") from None
     except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as err:
-        raise Halt(f"{what}: no usable answer ({err!r}); halting, no retry") from None
+        raise _halt(what, f"{what}: no usable answer ({err!r}); halting, no retry") from None
+    except Halt as err:
+        err.request = err.request or what
+        raise
 
 
 def _is_mp3_start(head: bytes) -> bool:
@@ -239,19 +257,56 @@ def _fetched_ids(record: Path) -> set[str]:
     return ids
 
 
+def read_halt_marker(workdir: Path) -> str | None:
+    """The marker's text, or None when there is none."""
+    path = workdir / HALT_MARKER
+    return path.read_text() if path.exists() else None
+
+
+def _write_halt_marker(workdir: Path, event_id: str | None, err: Halt, default_request: str, clock: Clock) -> None:
+    marker = {"event_id": event_id, "request": err.request or default_request, "reason": str(err), "time": clock.now().isoformat()}
+    path = workdir / HALT_MARKER
+    with path.open("w") as fh:
+        fh.write(json.dumps(marker, indent=2) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
 def run_download(event_ids: list[str], config: Config, workdir: Path, clock: Clock) -> list[str]:
-    """Fetch each event's MP3 once. Returns the ids fetched in this run."""
+    """Fetch each event's MP3 once. Returns the ids fetched in this run. Any halt writes the halt marker in the
+    working folder; while it exists every run refuses before anything is requested."""
+    text = read_halt_marker(workdir)
+    if text is not None:
+        raise HaltMarkerPresent(
+            f"a halt marker exists in {workdir} ({HALT_MARKER}); refusing to run, nothing was requested. "
+            f"Only the owner clears it, with --clear-halt.\n{text.strip()}"
+        )
     _check_event_ids(event_ids)
     _check_window(clock)  # refuse to start outside the window
-    pacer = _Pacer(clock)
     workdir.mkdir(parents=True, exist_ok=True)
+    state = {"event_id": None}  # the event being fetched, for the marker
+    try:
+        return _fetch_all(event_ids, config, workdir, clock, state)
+    except Halt as err:
+        default = f"reading {RECORD_FILE}" if isinstance(err, RecordCorrupt) else "(not a single request)"
+        _write_halt_marker(workdir, state["event_id"], err, default, clock)
+        raise
+
+
+def _fetch_all(event_ids: list[str], config: Config, workdir: Path, clock: Clock, state: dict) -> list[str]:
+    pacer = _Pacer(clock)
     record = workdir / RECORD_FILE
     done = _fetched_ids(record)
     fetched: list[str] = []
     for event_id in event_ids:
         if event_id in done:
             continue
-        url = _audio_url(event_id, config, pacer)
+        state["event_id"] = event_id
+        try:
+            url = _audio_url(event_id, config, pacer)
+        except Halt as err:
+            err.request = err.request or f"event {event_id} audio address from getDetailed (nothing requested from it)"
+            raise
         what = f"event {event_id} MP3"
         part, final = workdir / f"{event_id}.mp3.part", workdir / f"{event_id}.mp3"
         try:

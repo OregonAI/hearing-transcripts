@@ -73,7 +73,7 @@ def test_the_host_can_be_set_in_the_environment_and_the_halt_names_it(fake, cloc
         "HEARING_DOWNLOAD_HOST": "downloads.example.test",
     }
 
-    code = main(["download", "--workdir", str(tmp_path), EVENT], env=env, clock=clock, require_https=False)
+    code = main(["download", "--approved-run", "--workdir", str(tmp_path), EVENT], env=env, clock=clock, require_https=False)
 
     err = capsys.readouterr().err
     assert code == 2

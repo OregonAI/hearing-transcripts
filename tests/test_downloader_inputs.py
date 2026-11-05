@@ -38,7 +38,7 @@ def test_event_ids_must_be_digits_only(bad, fake, clock, tmp_path):
 def test_the_command_line_refuses_a_bad_event_id_with_exit_1(fake, clock, tmp_path, capsys):
     env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
 
-    code = main(["download", "--workdir", str(tmp_path), "../x"], env=env, clock=clock)
+    code = main(["download", "--approved-run", "--workdir", str(tmp_path), "../x"], env=env, clock=clock)
 
     assert code == 1
     assert "../x" in capsys.readouterr().err
@@ -76,7 +76,7 @@ def test_a_damaged_record_file_is_a_halt_with_exit_2(fake, clock, tmp_path, caps
     write_record(tmp_path, GOOD + '{"event_id": "20')
     env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
 
-    code = main(["download", "--workdir", str(tmp_path), "2026010003"], env=env, clock=clock, require_https=False)
+    code = main(["download", "--approved-run", "--workdir", str(tmp_path), "2026010003"], env=env, clock=clock, require_https=False)
 
     err = capsys.readouterr().err
     assert code == 2

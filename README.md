@@ -40,9 +40,15 @@ Enforced in code (each has a test against a local fake server):
 - No proxies (`http_proxy` and the like are ignored), no redirects followed, no rotating addresses, no disguised
   clients.
 - Event IDs must be digits only.
+- **The halt marker.** When the downloader halts for any reason (a refusal, an unexpected reply, an http error, a
+  damaged record) it writes `HALTED.json` in the working folder, naming the event ID, the request, the reason and the
+  time. While it exists every run refuses to start (exit 5) and makes no request. Only the owner clears it:
+  `download --clear-halt --workdir <dir>` prints the marker and removes it.
+- **The approval flag.** Every downloading run needs `--approved-run`. Without it the tool refuses (exit 4) and makes
+  no request.
 
 Not enforced by the code, because only the operator can: that this is a one-time backfill, that only 2026R1 committee
-recordings are fetched, that runs happen from the GPU desktop, and that the owner approves each run. Audio is never
+recordings are fetched, and that runs happen from the GPU desktop. (The owner's approval of each run is carried by `--approved-run`; the code can check the flag, not who typed it.) Audio is never
 kept or redistributed: it is hashed, transcribed, then deleted (the transcribe step is a later ticket).
 
 ## Running it (operator)
@@ -54,12 +60,22 @@ export HEARING_API_BASE_URL=...      # the Invintus API base URL, from the opera
 export HEARING_EMBEDDER_KEY=...      # the embedder key, from the operator; never commit it
 export HEARING_CLIENT_ID=...         # optional; the Invintus client ID (default 4879615486)
 export HEARING_DOWNLOAD_HOST=...     # optional; the expected MP3 host (default m-download.invintus.com)
-uv run hearing-transcripts download --workdir work 2026010001 2026010002
+uv run hearing-transcripts download --approved-run --workdir work 2026010001 2026010002
+
+# after a halt, once the owner has decided what happens next:
+uv run hearing-transcripts download --clear-halt --workdir work
 ```
 
-Exit codes: 0 done; 1 bad usage (missing configuration, an event ID that is not digits); 2 halted (a refusal or an
-unexpected reply, or a damaged record file; nothing is retried and the run waits for the owner); 3 outside the
-00:00-06:00 Pacific window.
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Done (also `--clear-halt`, whether or not a marker was there) |
+| 1 | Bad usage: missing configuration, no event IDs, an event ID that is not digits |
+| 2 | Halted: a refusal or an unexpected reply, or a damaged record file; the marker is written, nothing is retried |
+| 3 | Outside the 00:00-06:00 Pacific window |
+| 4 | Refused: no `--approved-run`; nothing requested |
+| 5 | Refused: a halt marker exists; nothing requested until the owner runs `--clear-halt` |
 
 ## Tests
 

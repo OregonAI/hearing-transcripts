@@ -22,7 +22,7 @@ def config(fake):
 
 
 def assert_nothing_kept(workdir):
-    assert sorted(p.name for p in workdir.iterdir()) == []  # no .mp3, no .part, no record
+    assert sorted(p.name for p in workdir.iterdir()) == ["HALTED.json"]  # no .mp3, no .part, no record; only the halt marker
 
 
 BAD_REPLIES = {
@@ -50,7 +50,7 @@ def test_a_bad_mp3_reply_exits_2_with_the_halt_message(fake, clock, tmp_path, ca
     fake.media_raw[EVENT] = BAD_REPLIES["html page with status 200"]
     env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY, "HEARING_DOWNLOAD_HOST": fake.download_host}
 
-    code = main(["download", "--workdir", str(tmp_path), EVENT], env=env, clock=clock, require_https=False)
+    code = main(["download", "--approved-run", "--workdir", str(tmp_path), EVENT], env=env, clock=clock, require_https=False)
 
     err = capsys.readouterr().err
     assert code == 2
