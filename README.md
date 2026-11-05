@@ -98,10 +98,14 @@ folder.
   fails when the two disagree. Version 1 is never edited: a new format is a new `transcript-v2` file and a new writer.
   The writer refuses (writes nothing) if its own version is not the schema's `format_version`.
 - **Validation gates the write.** The document is validated in memory, written to `.part`, synced, renamed, read back
-  and validated again, and only then is the MP3 deleted. If validation fails nothing is written and the MP3 is kept.
+  and validated again, the directory is synced, and only then is the MP3 deleted. If validation fails nothing is written
+  and the MP3 is kept. Validation also refuses NaN and Infinity anywhere (SessionGateway's reader takes finite numbers
+  only, and JSON Schema's `minimum` lets NaN through), and the file is written with `allow_nan=False`. `made_at` is the
+  injected clock's time in UTC.
   The MP3's sha256 must match `fetched.jsonl`, or it is kept and not transcribed. A transcript that already exists is
-  never overwritten; if its MP3 is still there (a run stopped before the delete) and the file validates and names that
-  MP3's hash, the MP3 is deleted.
+  never overwritten; if its MP3 is still there (a run stopped before the delete) and the file parses, validates, is for
+  this event and names that MP3's hash, the MP3 is deleted. Otherwise the MP3 is kept (exit 6 for a file that is corrupt,
+  invalid or another event's).
 - The model is taken from the local cache (`~/.cache/huggingface`) when it is there and downloaded from Hugging Face
   only if it is not. That is the only network use.
 
@@ -111,7 +115,7 @@ Exit codes of `transcribe` (an earlier event's transcript stays done when a late
 | --- | --- |
 | 0 | Done |
 | 1 | Bad usage or unusable input: an event not in `fetched.jsonl`, an MP3 missing or not matching its recorded hash, ids not digits |
-| 6 | A transcript failed validation: nothing written, MP3 kept |
+| 6 | A transcript failed validation (including a readback that does not parse, or an existing file that is corrupt, invalid or for another event): MP3 kept |
 | 7 | `--device cuda` but the CUDA libraries or the GPU are not usable |
 
 ### GPU setup (optional, no system CUDA)
@@ -120,7 +124,7 @@ The CUDA 12 libraries that CTranslate2 needs come as pip wheels in the tool's ow
 (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`):
 
 ```sh
-uv sync --extra gpu            # or: uv tool install --from . "hearing-transcripts[gpu]"
+uv sync --extra gpu            # or, as an installed tool: uv tool install ".[gpu]"
 uv run hearing-transcripts transcribe --workdir work --model small.en --device cuda
 ```
 
