@@ -44,7 +44,7 @@ def test_the_command_line_prints_a_halt_and_exits_2(raw, fake, clock, tmp_path, 
     fake.detail_raw[EVENT] = raw
     env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
 
-    code = main(["download", "--workdir", str(tmp_path), EVENT], env=env, clock=clock, require_https=False)
+    code = main(["download", "--approved-run", "--workdir", str(tmp_path), EVENT], env=env, clock=clock, require_https=False)
 
     err = capsys.readouterr().err
     assert code == 2
