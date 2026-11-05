@@ -30,6 +30,15 @@ def _guard(real):
     return guarded
 
 
+def _guard_lookup(real):
+    def guarded(host, *args, **kwargs):
+        if host not in LOOPBACK:
+            raise NetworkBlocked(f"blocked: a test tried to look up {host!r}; tests may use only 127.0.0.1 and ::1")
+        return real(host, *args, **kwargs)
+
+    return guarded
+
+
 @pytest.fixture(scope="session", autouse=True)
 def no_network_but_loopback():
     """For the whole session: any connect to a non-loopback address raises NetworkBlocked, and proxy variables
@@ -37,6 +46,7 @@ def no_network_but_loopback():
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(socket.socket, "connect", _guard(socket.socket.connect))
         mp.setattr(socket.socket, "connect_ex", _guard(socket.socket.connect_ex))
+        mp.setattr(socket, "getaddrinfo", _guard_lookup(socket.getaddrinfo))
         for name in list(os.environ):
             if name.lower() in PROXY_VARS:
                 mp.delenv(name)
