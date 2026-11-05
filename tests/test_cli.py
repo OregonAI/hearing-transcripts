@@ -21,7 +21,7 @@ def test_without_the_key_it_refuses_and_asks_for_nothing(fake, clock, tmp_path, 
 
 
 def test_without_the_base_url_it_refuses(fake, clock, tmp_path, capsys):
-    code, out = run(["download", "--workdir", str(tmp_path), "2026010001"], {"HEARING_EMBEDDER_KEY": DUMMY_KEY}, clock, capsys)
+    code, out = run(["download", "--workdir", str(tmp_path), "2026010001"], {"HEARING_EMBEDDER_KEY": DUMMY_KEY, "HEARING_DOWNLOAD_HOST": fake.download_host}, clock, capsys)
 
     assert code != 0
     assert "HEARING_API_BASE_URL" in out.err
@@ -29,7 +29,7 @@ def test_without_the_base_url_it_refuses(fake, clock, tmp_path, capsys):
 
 
 def test_a_run_downloads_and_reports(fake, clock, tmp_path, capsys):
-    env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
+    env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY, "HEARING_DOWNLOAD_HOST": fake.download_host}
     code, out = run(["download", "--workdir", str(tmp_path), "2026010001"], env, clock, capsys)
 
     assert code == 0
@@ -39,7 +39,7 @@ def test_a_run_downloads_and_reports(fake, clock, tmp_path, capsys):
 
 def test_a_halt_exits_nonzero_with_the_message_and_never_prints_the_key(fake, clock, tmp_path, capsys):
     fake.detail_override["2026010001"] = (429, b"{}")
-    env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
+    env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY, "HEARING_DOWNLOAD_HOST": fake.download_host}
     code, out = run(["download", "--workdir", str(tmp_path), "2026010001"], env, clock, capsys)
 
     assert code == 2
@@ -52,7 +52,7 @@ def test_the_window_refusal_exits_nonzero(fake, tmp_path, capsys):
 
     from conftest import PACIFIC, FakeClock
 
-    env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
+    env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY, "HEARING_DOWNLOAD_HOST": fake.download_host}
     code, out = run(
         ["download", "--workdir", str(tmp_path), "2026010001"],
         env,

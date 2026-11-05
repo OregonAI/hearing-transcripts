@@ -58,6 +58,9 @@ DEFAULT_DOWNLOAD_HOST = "m-download.invintus.com"
 
 @dataclass(frozen=True)
 class Config:
+    """`download_host` defaults to the host of the MP3 URL the research captured; HEARING_DOWNLOAD_HOST overrides it.
+    `require_https` is True except in tests against the plain-http local fake; the command line never turns it off."""
+
     base_url: str
     api_key: str = field(repr=False)
     client_id: str = "4879615486"
@@ -66,7 +69,16 @@ class Config:
 
 
 def check_audio_url(url: str, config: Config, event_id: str) -> None:
-    """Stub (red): not enforced yet."""
+    """The audio address from getDetailed must be https on exactly `config.download_host` (host and port, no
+    userinfo), or the run halts before anything is requested from it."""
+    parts = urlsplit(url)
+    if parts.netloc.lower() != config.download_host.lower():
+        raise Halt(
+            f"event {event_id}: the audio address is not on the expected host {config.download_host!r} "
+            f"(got {parts.netloc!r}); halting, nothing requested"
+        )
+    if config.require_https and parts.scheme != "https":
+        raise Halt(f"event {event_id}: the audio address is not https; halting, nothing requested")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

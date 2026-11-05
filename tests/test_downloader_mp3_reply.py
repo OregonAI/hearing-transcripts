@@ -48,7 +48,7 @@ def test_a_bad_mp3_reply_halts_and_nothing_is_kept_or_recorded(reply, fake, cloc
 
 def test_a_bad_mp3_reply_exits_2_with_the_halt_message(fake, clock, tmp_path, capsys):
     fake.media_raw[EVENT] = BAD_REPLIES["html page with status 200"]
-    env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
+    env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY, "HEARING_DOWNLOAD_HOST": fake.download_host}
 
     code = main(["download", "--workdir", str(tmp_path), EVENT], env=env, clock=clock, require_https=False)
 
