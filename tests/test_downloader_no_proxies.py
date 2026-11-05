@@ -23,12 +23,13 @@ def proxy_env(monkeypatch):
     monkeypatch.delenv("NO_PROXY", raising=False)
 
 
-def test_the_opener_has_an_empty_proxy_handler_and_no_other(proxy_env):
+def test_the_opener_carries_no_proxy(proxy_env):
     opener = download.build_opener()
 
+    # An empty ProxyHandler registers no *_open methods, so the opener simply has no proxy handler at all.
     proxy_handlers = [h for h in opener.handlers if isinstance(h, urllib.request.ProxyHandler)]
-    assert len(proxy_handlers) == 1
-    assert proxy_handlers[0].proxies == {}
+    assert [h.proxies for h in proxy_handlers] == []
+    assert not any(hasattr(h, "proxy_open") for h in opener.handlers)
 
 
 def _import_fresh_copy():
