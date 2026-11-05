@@ -1,0 +1,13 @@
+# Audio is never kept or committed (SessionGateway ADR-0051).
+*.mp3
+*.mp4
+*.m4a
+*.wav
+*.part
+# The downloader's working folder.
+work/
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+dist/

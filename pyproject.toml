@@ -1,0 +1,26 @@
+[project]
+name = "hearing-transcripts"
+version = "0.1.0"
+description = "Machine transcripts of Oregon Legislature committee hearings for SessionGateway (one-time backfill)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.scripts]
+hearing-transcripts = "hearing_transcripts.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hearing_transcripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
