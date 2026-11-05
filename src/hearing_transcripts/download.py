@@ -50,7 +50,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+def build_opener() -> urllib.request.OpenerDirector:
+    """No proxies (ADR-0051, no evasion): an empty ProxyHandler stops urllib reading http(s)_proxy from the
+    environment, and redirects are never followed."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+
+
+_opener = build_opener()
 
 
 def _check_window(clock: Clock) -> None:
