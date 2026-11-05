@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import socket
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -9,6 +11,36 @@ from fake_invintus import FakeInvintus
 
 class NetworkBlocked(RuntimeError):
     """A test tried to reach a non-loopback address."""
+
+
+LOOPBACK = {"127.0.0.1", "::1"}
+PROXY_VARS = ("http_proxy", "https_proxy", "all_proxy", "no_proxy")
+
+
+def _guard(real):
+    def guarded(self, address, *args, **kwargs):
+        host = address[0] if isinstance(address, tuple) else None
+        if self.family in (socket.AF_INET, socket.AF_INET6) and host not in LOOPBACK:
+            raise NetworkBlocked(
+                f"blocked: a test tried to connect to {address!r}; tests may connect only to 127.0.0.1 and ::1 "
+                "(no request to Invintus or anything else, ever)"
+            )
+        return real(self, address, *args, **kwargs)
+
+    return guarded
+
+
+@pytest.fixture(scope="session", autouse=True)
+def no_network_but_loopback():
+    """For the whole session: any connect to a non-loopback address raises NetworkBlocked, and proxy variables
+    are removed so nothing can be routed through one."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(socket.socket, "connect", _guard(socket.socket.connect))
+        mp.setattr(socket.socket, "connect_ex", _guard(socket.socket.connect_ex))
+        for name in list(os.environ):
+            if name.lower() in PROXY_VARS:
+                mp.delenv(name)
+        yield
 
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
