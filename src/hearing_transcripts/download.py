@@ -1,0 +1,325 @@
+"""The downloader. What the code enforces (SessionGateway ADR-0051):
+
+- only between 00:00 and 06:00 Pacific; one request at a time, about 3 s apart (monotonic clock);
+- each event fetched once (the record file `fetched.jsonl` in the working folder; a damaged record fails closed);
+- MP3 only, never MP4: the address must be https on the expected download host and end in .mp3, and the reply must be
+  audio with a matching Content-Length and an MP3 start, written to `<id>.mp3.part`, synced, then renamed;
+- the exact User-Agent below on every request; no proxies, no redirects;
+- the first 401, 403, 429, any other unexpected reply or any http.client error halts the run, with no retry, and a
+  halt writes the marker `HALTED.json`; while it exists every run refuses before any request (the owner clears it).
+
+What it does not enforce, because only the operator can: one-time backfill, 2026R1 committee recordings only, runs from
+the GPU desktop (the command line requires `--approved-run`).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import http.client
+import json
+import os
+import re
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import urlsplit
+from typing import TypeVar
+from zoneinfo import ZoneInfo
+
+from .clock import Clock
+
+T = TypeVar("T")
+
+USER_AGENT = "SessionGateway-transcripts/1 (+https://github.com/OregonAI/SessionGateway)"
+RECORD_FILE = "fetched.jsonl"
+HALT_MARKER = "HALTED.json"
+TIMEOUT_SECONDS = 120
+PACE_SECONDS = 3.0
+PACIFIC = ZoneInfo("America/Los_Angeles")
+WINDOW_START_HOUR = 0  # 00:00 Pacific, inclusive
+WINDOW_END_HOUR = 6  # 06:00 Pacific, exclusive
+
+
+class Halt(Exception):
+    """The run stopped and waits for the owner. Nothing retries around it. `request` names the request that was
+    being made (set where it is known; run_download fills it in otherwise) for the halt marker."""
+
+    request: str | None = None
+
+
+class InvalidEventId(ValueError):
+    """An event ID that is not digits only. Checked before anything is requested or written."""
+
+
+class RecordCorrupt(Halt):
+    """The record file is damaged (for example a torn last line). The run fails closed and waits for the owner."""
+
+
+class HaltMarkerPresent(Exception):
+    """An earlier run halted and left the marker. Nothing runs, and nothing is requested, until the owner clears it."""
+
+
+class OutsideWindow(Exception):
+    """The run was started outside 00:00-06:00 Pacific."""
+
+
+DEFAULT_DOWNLOAD_HOST = "m-download.invintus.com"
+
+
+@dataclass(frozen=True)
+class Config:
+    """`download_host` defaults to the host of the MP3 URL the research captured; HEARING_DOWNLOAD_HOST overrides it.
+    `require_https` is True except in tests against the plain-http local fake; the command line never turns it off."""
+
+    base_url: str
+    api_key: str = field(repr=False)
+    client_id: str = "4879615486"
+    download_host: str = DEFAULT_DOWNLOAD_HOST
+    require_https: bool = True
+
+
+def check_audio_url(url: str, config: Config, event_id: str) -> None:
+    """The audio address from getDetailed must be https on exactly `config.download_host` (host and port, no
+    userinfo), or the run halts before anything is requested from it."""
+    parts = urlsplit(url)
+    if parts.netloc.lower() != config.download_host.lower():
+        raise Halt(
+            f"event {event_id}: the audio address is not on the expected host {config.download_host!r} "
+            f"(got {parts.netloc!r}); halting, nothing requested"
+        )
+    if config.require_https and parts.scheme != "https":
+        raise Halt(f"event {event_id}: the audio address is not https; halting, nothing requested")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):  # a redirect is an unexpected reply, not something to follow
+        return None
+
+
+def build_opener() -> urllib.request.OpenerDirector:
+    """No proxies (ADR-0051, no evasion): an empty ProxyHandler stops urllib reading http(s)_proxy from the
+    environment, and redirects are never followed."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+
+
+_opener = build_opener()
+
+
+def _check_window(clock: Clock) -> None:
+    hour = clock.now().astimezone(PACIFIC).hour
+    if not WINDOW_START_HOUR <= hour < WINDOW_END_HOUR:
+        raise OutsideWindow("the downloader runs only between 00:00 and 06:00 Pacific; refusing to continue")
+
+
+class _Pacer:
+    """Keeps requests about PACE_SECONDS apart and inside the window. Called before every request."""
+
+    def __init__(self, clock: Clock) -> None:
+        self.clock = clock
+        self.last: float | None = None  # a monotonic reading, so a wall-clock step cannot change the pacing
+
+    def before_request(self) -> None:
+        if self.last is not None:
+            wait = PACE_SECONDS - (self.clock.monotonic() - self.last)
+            if wait > 0:
+                self.clock.sleep(wait)
+        _check_window(self.clock)  # after the wait, so a run never sends a request outside the window
+
+    def after_request(self) -> None:
+        self.last = self.clock.monotonic()
+
+
+def _halt(request: str, message: str) -> Halt:
+    err = Halt(message)
+    err.request = request
+    return err
+
+
+def _open(req: urllib.request.Request, what: str, pacer: _Pacer, read: Callable[[http.client.HTTPResponse], T]) -> T:
+    """One request. Any answer that is not a 200 halts; there is no retry. `read` consumes the reply."""
+    pacer.before_request()
+    req.add_header("User-Agent", USER_AGENT)
+    try:
+        try:
+            with _opener.open(req, timeout=TIMEOUT_SECONDS) as resp:
+                if resp.status != 200:
+                    raise Halt(f"{what}: the server answered {resp.status}; halting, no retry")
+                return read(resp)
+        finally:
+            pacer.after_request()
+    except urllib.error.HTTPError as err:
+        raise _halt(what, f"{what}: the server answered {err.code}; halting, no retry") from None
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as err:
+        raise _halt(what, f"{what}: no usable answer ({err!r}); halting, no retry") from None
+    except Halt as err:
+        err.request = err.request or what
+        raise
+
+
+def _is_mp3_start(head: bytes) -> bool:
+    """An ID3v2 tag, or an MPEG audio frame sync (eleven set bits)."""
+    return head[:3] == b"ID3" or (len(head) >= 2 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0)
+
+
+def _save_mp3(resp: http.client.HTTPResponse, what: str, part: Path) -> tuple[str, int]:
+    """Check the reply and write it to `part`, synced. Returns (sha256, bytes). Halts on anything but a whole MP3."""
+    ctype = resp.headers.get_content_type()
+    if not ctype.startswith("audio/"):
+        raise Halt(f"{what}: the reply is {ctype!r}, not audio; halting, no retry")
+    length = resp.headers.get("Content-Length", "").strip()
+    if not length.isdigit():
+        raise Halt(f"{what}: the reply has no usable Content-Length; halting, no retry")
+    digest, size, first = hashlib.sha256(), 0, True
+    with part.open("wb") as fh:
+        while chunk := resp.read(1 << 20):
+            if first:
+                if not _is_mp3_start(chunk):
+                    raise Halt(f"{what}: the body does not start like an MP3; halting, no retry")
+                first = False
+            fh.write(chunk)
+            digest.update(chunk)
+            size += len(chunk)
+        if size == 0:
+            raise Halt(f"{what}: the body is empty; halting, no retry")
+        if size != int(length):
+            raise Halt(f"{what}: got {size} bytes but Content-Length said {length}; halting, no retry")
+        fh.flush()
+        os.fsync(fh.fileno())
+    return digest.hexdigest(), size
+
+
+def _request(req: urllib.request.Request, what: str, pacer: _Pacer) -> tuple[int, bytes]:
+    def read(resp: http.client.HTTPResponse) -> tuple[int, bytes]:
+        return resp.status, resp.read()
+
+    return _open(req, what, pacer, read)
+
+
+def _audio_url(event_id: str, config: Config, pacer: _Pacer) -> str:
+    payload = {
+        "clientID": config.client_id,
+        "eventID": event_id,
+        "showDownloadLinks": True,
+    }
+    req = urllib.request.Request(
+        f"{config.base_url.rstrip('/')}/Event/getDetailed",
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "embedder",
+            "wsc-api-key": config.api_key,
+        },
+    )
+    _, body = _request(req, f"event {event_id} getDetailed", pacer)
+    try:
+        url = json.loads(body)["data"]["downloadLinks"]["audioDownloadURI"]
+    except (ValueError, KeyError, TypeError):
+        raise Halt(f"event {event_id} getDetailed: unexpected body; halting, no retry") from None
+    if not isinstance(url, str) or not url:
+        raise Halt(f"event {event_id} getDetailed: no audio address in the reply; halting, no retry")
+    check_audio_url(url, config, event_id)
+    if not urlsplit(url).path.lower().endswith(".mp3"):
+        raise Halt(f"event {event_id}: the audio address is not an MP3; halting, nothing requested")
+    return url
+
+
+_EVENT_ID = re.compile(r"[0-9]+")  # ASCII digits only: no path characters, no Unicode digits
+
+
+def _check_event_ids(event_ids: list[str]) -> None:
+    for event_id in event_ids:
+        if not _EVENT_ID.fullmatch(event_id):
+            raise InvalidEventId(f"event ID {event_id!r} is not digits only; nothing was requested")
+
+
+def _fetched_ids(record: Path) -> set[str]:
+    """The ids in the record file. A line that is not a record (a torn last line, say) fails closed."""
+    if not record.exists():
+        return set()
+    ids: set[str] = set()
+    for number, line in enumerate(record.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            event_id = json.loads(line)["event_id"]
+            if not isinstance(event_id, str):
+                raise TypeError
+        except (ValueError, KeyError, TypeError):
+            raise RecordCorrupt(
+                f"{record} line {number} is not a valid record ({line[:60]!r}); refusing to run, "
+                "nothing was requested. The file is untouched."
+            ) from None
+        ids.add(event_id)
+    return ids
+
+
+def read_halt_marker(workdir: Path) -> str | None:
+    """The marker's text, or None when there is none."""
+    path = workdir / HALT_MARKER
+    return path.read_text() if path.exists() else None
+
+
+def _write_halt_marker(workdir: Path, event_id: str | None, err: Halt, default_request: str, clock: Clock) -> None:
+    marker = {"event_id": event_id, "request": err.request or default_request, "reason": str(err), "time": clock.now().isoformat()}
+    path = workdir / HALT_MARKER
+    with path.open("w") as fh:
+        fh.write(json.dumps(marker, indent=2) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def run_download(event_ids: list[str], config: Config, workdir: Path, clock: Clock) -> list[str]:
+    """Fetch each event's MP3 once. Returns the ids fetched in this run. Any halt writes the halt marker in the
+    working folder; while it exists every run refuses before anything is requested."""
+    text = read_halt_marker(workdir)
+    if text is not None:
+        raise HaltMarkerPresent(
+            f"a halt marker exists in {workdir} ({HALT_MARKER}); refusing to run, nothing was requested. "
+            f"Only the owner clears it, with --clear-halt.\n{text.strip()}"
+        )
+    _check_event_ids(event_ids)
+    _check_window(clock)  # refuse to start outside the window
+    workdir.mkdir(parents=True, exist_ok=True)
+    state = {"event_id": None}  # the event being fetched, for the marker
+    try:
+        return _fetch_all(event_ids, config, workdir, clock, state)
+    except Halt as err:
+        default = f"reading {RECORD_FILE}" if isinstance(err, RecordCorrupt) else "(not a single request)"
+        _write_halt_marker(workdir, state["event_id"], err, default, clock)
+        raise
+
+
+def _fetch_all(event_ids: list[str], config: Config, workdir: Path, clock: Clock, state: dict) -> list[str]:
+    pacer = _Pacer(clock)
+    record = workdir / RECORD_FILE
+    done = _fetched_ids(record)
+    fetched: list[str] = []
+    for event_id in event_ids:
+        if event_id in done:
+            continue
+        state["event_id"] = event_id
+        try:
+            url = _audio_url(event_id, config, pacer)
+        except Halt as err:
+            err.request = err.request or f"event {event_id} audio address from getDetailed (nothing requested from it)"
+            raise
+        what = f"event {event_id} MP3"
+        part, final = workdir / f"{event_id}.mp3.part", workdir / f"{event_id}.mp3"
+        try:
+            sha256, size = _open(urllib.request.Request(url, method="GET"), what, pacer, lambda r: _save_mp3(r, what, part))
+            os.replace(part, final)  # the file is whole and synced; only now is it kept
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
+        entry = {"event_id": event_id, "sha256": sha256, "bytes": size}
+        with record.open("a") as fh:  # recorded only after the file is complete
+            fh.write(json.dumps(entry) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        done.add(event_id)
+        fetched.append(event_id)
+    return fetched
