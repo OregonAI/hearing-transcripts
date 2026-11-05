@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -95,7 +96,7 @@ def _request(req: urllib.request.Request, what: str, pacer: _Pacer) -> tuple[int
             pacer.after_request()
     except urllib.error.HTTPError as err:
         raise Halt(f"{what}: the server answered {err.code}; halting, no retry") from None
-    except (urllib.error.URLError, TimeoutError, OSError) as err:
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as err:
         raise Halt(f"{what}: no usable answer ({err}); halting, no retry") from None
     if status != 200:
         raise Halt(f"{what}: the server answered {status}; halting, no retry")
