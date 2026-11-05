@@ -7,7 +7,7 @@ from hearing_transcripts.cli import main
 
 
 def run(argv, env, clock, capsys):
-    code = main(argv, env=env, clock=clock)
+    code = main(argv, env=env, clock=clock, require_https=False)  # the fake speaks plain http
     return code, capsys.readouterr()
 
 

@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from conftest import DUMMY_KEY
+from conftest import DUMMY_KEY, fake_config
 from fake_invintus import audio_bytes
 from hearing_transcripts.download import Config, Halt, run_download
 
@@ -15,7 +15,7 @@ UA = "SessionGateway-transcripts/1 (+https://github.com/OregonAI/SessionGateway)
 
 
 def config(fake):
-    return Config(base_url=fake.base_url, api_key=DUMMY_KEY)
+    return fake_config(fake)
 
 
 def test_writes_the_mp3_and_records_its_sha256(fake, clock, tmp_path):

@@ -53,11 +53,20 @@ class OutsideWindow(Exception):
     """The run was started outside 00:00-06:00 Pacific."""
 
 
+DEFAULT_DOWNLOAD_HOST = "m-download.invintus.com"
+
+
 @dataclass(frozen=True)
 class Config:
     base_url: str
     api_key: str = field(repr=False)
     client_id: str = "4879615486"
+    download_host: str = DEFAULT_DOWNLOAD_HOST
+    require_https: bool = True
+
+
+def check_audio_url(url: str, config: Config, event_id: str) -> None:
+    """Stub (red): not enforced yet."""
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -178,6 +187,7 @@ def _audio_url(event_id: str, config: Config, pacer: _Pacer) -> str:
         raise Halt(f"event {event_id} getDetailed: unexpected body; halting, no retry") from None
     if not isinstance(url, str) or not url:
         raise Halt(f"event {event_id} getDetailed: no audio address in the reply; halting, no retry")
+    check_audio_url(url, config, event_id)
     if not urlsplit(url).path.lower().endswith(".mp3"):
         raise Halt(f"event {event_id}: the audio address is not an MP3; halting, nothing requested")
     return url

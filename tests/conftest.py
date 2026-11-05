@@ -74,3 +74,12 @@ def fake():
 def clock():
     # 02:00 Pacific, inside the 00:00-06:00 window.
     return FakeClock(datetime(2026, 11, 10, 2, 0, tzinfo=PACIFIC))
+
+
+def fake_config(fake, **overrides):
+    """A Config pointing at the local fake. The fake speaks plain http on 127.0.0.1, so the https rule is switched
+    off here and only here; the command line never does that."""
+    from hearing_transcripts.download import Config
+
+    settings = {"base_url": fake.base_url, "api_key": DUMMY_KEY, "download_host": fake.download_host, "require_https": False}
+    return Config(**{**settings, **overrides})

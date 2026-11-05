@@ -55,6 +55,8 @@ class FakeInvintus:
     # event id -> the exact bytes to write to the socket instead of any reply (garbage, truncation, no length)
     detail_raw: dict[str, bytes] = field(default_factory=dict)
     media_raw: dict[str, bytes] = field(default_factory=dict)
+    # event id -> a whole audio URI to advertise instead of the normal one (wrong host, userinfo tricks)
+    audio_uri_override: dict[str, str] = field(default_factory=dict)
     # event id -> audio URI path to advertise instead of the normal one
     audio_path_override: dict[str, str] = field(default_factory=dict)
     seen: list[Seen] = field(default_factory=list)
@@ -90,12 +92,13 @@ class FakeInvintus:
                     status, payload = fake.detail_override[event_id]
                     return self._send(status, payload, "application/json")
                 audio = fake.audio_path_override.get(event_id, f"/media/{event_id}_audio.mp3")
+                uri = fake.audio_uri_override.get(event_id, f"{fake.base_url}{audio}")
                 reply = {
                     "data": {
                         "eventID": event_id,
                         "downloadLinks": {
                             "videoDownloadURI": f"{fake.base_url}/media/{event_id}.mp4",
-                            "audioDownloadURI": f"{fake.base_url}{audio}",
+                            "audioDownloadURI": uri,
                         },
                     }
                 }
@@ -122,6 +125,11 @@ class FakeInvintus:
         if self._server:
             self._server.shutdown()
             self._server.server_close()
+
+    @property
+    def download_host(self) -> str:
+        """host:port the fake serves its MP3s from, the value Config.download_host needs to accept them."""
+        return self.base_url.removeprefix("http://")
 
     def paths(self) -> list[str]:
         return [s.path for s in self.seen]

@@ -46,7 +46,12 @@ def _import_fresh_copy():
 
 def test_with_proxy_variables_set_requests_still_go_straight_to_the_fake(proxy_env, fake, clock, tmp_path):
     fresh = _import_fresh_copy()
-    fetched = fresh.run_download(["2026010001"], fresh.Config(base_url=fake.base_url, api_key=DUMMY_KEY), tmp_path, clock)
+    fetched = fresh.run_download(
+        ["2026010001"],
+        fresh.Config(base_url=fake.base_url, api_key=DUMMY_KEY, download_host=fake.download_host, require_https=False),
+        tmp_path,
+        clock,
+    )
 
     assert fetched == ["2026010001"]
     assert fake.paths() == ["/Event/getDetailed", "/media/2026010001_audio.mp3"]

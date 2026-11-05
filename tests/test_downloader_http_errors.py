@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import DUMMY_KEY
+from conftest import DUMMY_KEY, fake_config
 from fake_invintus import http_response
 from hearing_transcripts.cli import main
 from hearing_transcripts.download import Config, Halt, run_download
@@ -24,7 +24,7 @@ def test_getdetailed_http_client_errors_halt(raw, fake, clock, tmp_path):
     fake.detail_raw[EVENT] = raw
 
     with pytest.raises(Halt, match=EVENT):
-        run_download([EVENT, "2026010002"], Config(base_url=fake.base_url, api_key=DUMMY_KEY), tmp_path, clock)
+        run_download([EVENT, "2026010002"], fake_config(fake), tmp_path, clock)
 
     assert fake.paths() == ["/Event/getDetailed"]
 
@@ -34,7 +34,7 @@ def test_mp3_http_client_errors_halt(raw, fake, clock, tmp_path):
     fake.media_raw[EVENT] = raw
 
     with pytest.raises(Halt, match=EVENT):
-        run_download([EVENT, "2026010002"], Config(base_url=fake.base_url, api_key=DUMMY_KEY), tmp_path, clock)
+        run_download([EVENT, "2026010002"], fake_config(fake), tmp_path, clock)
 
     assert fake.paths() == ["/Event/getDetailed", f"/media/{EVENT}_audio.mp3"]
 
@@ -44,7 +44,7 @@ def test_the_command_line_prints_a_halt_and_exits_2(raw, fake, clock, tmp_path, 
     fake.detail_raw[EVENT] = raw
     env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
 
-    code = main(["download", "--workdir", str(tmp_path), EVENT], env=env, clock=clock)
+    code = main(["download", "--workdir", str(tmp_path), EVENT], env=env, clock=clock, require_https=False)
 
     err = capsys.readouterr().err
     assert code == 2

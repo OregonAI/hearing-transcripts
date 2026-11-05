@@ -6,12 +6,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from conftest import DUMMY_KEY, PACIFIC, FakeClock
+from conftest import DUMMY_KEY, FakeClock, PACIFIC, fake_config
 from hearing_transcripts.download import Config, Halt, OutsideWindow, run_download
 
 
 def config(fake):
-    return Config(base_url=fake.base_url, api_key=DUMMY_KEY)
+    return fake_config(fake)
 
 
 def test_requests_are_three_seconds_apart(fake, clock, tmp_path):

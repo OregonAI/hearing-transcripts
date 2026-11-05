@@ -9,10 +9,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .clock import Clock, SystemClock
-from .download import Config, Halt, InvalidEventId, OutsideWindow, run_download
+from .download import DEFAULT_DOWNLOAD_HOST, Config, Halt, InvalidEventId, OutsideWindow, run_download
 
 
-def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = None, clock: Clock | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = None, clock: Clock | None = None, require_https: bool = True) -> int:
+    """`require_https=False` exists only so tests can talk to the plain-http local fake; nothing on the command line sets it."""
     env = os.environ if env is None else env
     clock = clock or SystemClock()
     parser = argparse.ArgumentParser(prog="hearing-transcripts")
@@ -27,7 +28,10 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
         if not value:
             print(f"{name} is not set; the operator supplies it in the environment", file=sys.stderr)
             return 1
-    config = Config(base_url=base_url, api_key=key, client_id=env.get("HEARING_CLIENT_ID", "4879615486"))
+    config = Config(base_url=base_url, api_key=key, client_id=env.get("HEARING_CLIENT_ID", "4879615486"),
+        download_host=env.get("HEARING_DOWNLOAD_HOST") or DEFAULT_DOWNLOAD_HOST,
+        require_https=require_https,
+    )
     try:
         fetched = run_download(args.event_ids, config, args.workdir, clock)
     except InvalidEventId as err:

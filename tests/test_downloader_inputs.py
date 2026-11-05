@@ -6,13 +6,13 @@ import json
 
 import pytest
 
-from conftest import DUMMY_KEY
+from conftest import DUMMY_KEY, fake_config
 from hearing_transcripts.cli import main
 from hearing_transcripts.download import Config, Halt, InvalidEventId, RecordCorrupt, run_download
 
 
 def config(fake):
-    return Config(base_url=fake.base_url, api_key=DUMMY_KEY)
+    return fake_config(fake)
 
 
 def test_repr_of_config_hides_the_key():
@@ -76,7 +76,7 @@ def test_a_damaged_record_file_is_a_halt_with_exit_2(fake, clock, tmp_path, caps
     write_record(tmp_path, GOOD + '{"event_id": "20')
     env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
 
-    code = main(["download", "--workdir", str(tmp_path), "2026010003"], env=env, clock=clock)
+    code = main(["download", "--workdir", str(tmp_path), "2026010003"], env=env, clock=clock, require_https=False)
 
     err = capsys.readouterr().err
     assert code == 2

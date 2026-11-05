@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from conftest import DUMMY_KEY
+from conftest import DUMMY_KEY, fake_config
 from fake_invintus import http_response
 from hearing_transcripts import download
 from hearing_transcripts.cli import main
@@ -18,7 +18,7 @@ FRAME_SYNC_MP3 = b"\xff\xfb\x90\x00" + b"\x00" * 32
 
 
 def config(fake):
-    return Config(base_url=fake.base_url, api_key=DUMMY_KEY)
+    return fake_config(fake)
 
 
 def assert_nothing_kept(workdir):
@@ -50,7 +50,7 @@ def test_a_bad_mp3_reply_exits_2_with_the_halt_message(fake, clock, tmp_path, ca
     fake.media_raw[EVENT] = BAD_REPLIES["html page with status 200"]
     env = {"HEARING_API_BASE_URL": fake.base_url, "HEARING_EMBEDDER_KEY": DUMMY_KEY}
 
-    code = main(["download", "--workdir", str(tmp_path), EVENT], env=env, clock=clock)
+    code = main(["download", "--workdir", str(tmp_path), EVENT], env=env, clock=clock, require_https=False)
 
     err = capsys.readouterr().err
     assert code == 2
