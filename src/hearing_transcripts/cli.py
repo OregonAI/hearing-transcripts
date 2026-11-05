@@ -33,7 +33,7 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     args = parser.parse_args(argv)
 
     if args.command == "transcribe":
-        return _transcribe(args, engine_factory)
+        return _transcribe(args, engine_factory, clock)
 
     if args.clear_halt:
         text = read_halt_marker(args.workdir)
@@ -78,11 +78,11 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     return 0
 
 
-def _transcribe(args: argparse.Namespace, engine_factory: Callable[[argparse.Namespace], Engine] | None) -> int:
+def _transcribe(args: argparse.Namespace, engine_factory: Callable[[argparse.Namespace], Engine] | None, clock: Clock) -> int:
     """Exit 0 done, 1 bad usage or unusable input, 6 a transcript failed validation (nothing written, MP3 kept), 7 CUDA unusable."""
     try:
         engine = engine_factory(args) if engine_factory else WhisperEngine(args.model, args.device)
-        done = run_transcribe(args.event_ids, args.workdir, engine)
+        done = run_transcribe(args.event_ids, args.workdir, engine, clock=clock)
     except TranscriptInvalid as err:
         print(f"INVALID: {err}", file=sys.stderr)
         return 6

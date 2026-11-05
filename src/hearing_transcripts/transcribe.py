@@ -10,17 +10,19 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import math
 import os
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import timezone
 from importlib import resources
 from pathlib import Path
 from typing import Any, Protocol
 
 import jsonschema
 
+from .clock import Clock, SystemClock
 from .download import RECORD_FILE
 
 SCHEMA_NAME = "transcript-v1.schema.json"
@@ -42,11 +44,39 @@ def load_vendored_schema() -> dict[str, Any]:
     return json.loads((resources.files("hearing_transcripts") / "schemas" / SCHEMA_NAME).read_text())
 
 
+def _non_finite(value: Any, path: tuple[Any, ...] = ()) -> list[str]:
+    """Paths of every NaN and +-Infinity in the document. JSON Schema's minimum and maximum let NaN through, and
+    SessionGateway's reader takes finite numbers only, so this is checked on its own."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return [".".join(str(p) for p in path)]
+    if isinstance(value, dict):
+        return [bad for k, v in value.items() for bad in _non_finite(v, (*path, k))]
+    if isinstance(value, list):
+        return [bad for i, v in enumerate(value) for bad in _non_finite(v, (*path, i))]
+    return []
+
+
+def _refuse_constant(name: str) -> Any:
+    raise TranscriptInvalid(f"the file holds {name}, which is not JSON and not a finite number")
+
+
+def read_transcript_file(path: Path) -> Any:
+    """Parse a transcript file as strict JSON. A file that does not parse (or holds NaN or Infinity) is a TranscriptInvalid."""
+    try:
+        return json.loads(path.read_text(), parse_constant=_refuse_constant)
+    except ValueError as err:  # JSONDecodeError and UnicodeDecodeError; TranscriptInvalid is not a ValueError and passes through
+        raise TranscriptInvalid(f"{path.name} does not parse as JSON: {err}") from None
+
+
 def validate_transcript(doc: Any, schema: dict[str, Any]) -> None:
-    """Raise TranscriptInvalid naming each path that fails. A `format_version` that is not the schema's is refused first."""
+    """Raise TranscriptInvalid naming each path that fails. A `format_version` that is not the schema's is refused first,
+    then any number that is not finite."""
     wanted = schema["properties"]["format_version"]["const"]
     if isinstance(doc, dict) and doc.get("format_version") != wanted:
         raise TranscriptInvalid(f"format_version is {doc.get('format_version')!r} but the vendored schema is version {wanted}")
+    bad = _non_finite(doc)
+    if bad:
+        raise TranscriptInvalid(f"numbers must be finite (no NaN or Infinity), at: {', '.join(b or '<file>' for b in bad[:10])}")
     errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(doc), key=lambda e: list(e.absolute_path))
     if errors:
         lines = [f"{'.'.join(str(p) for p in e.absolute_path) or '<file>'}: {e.message[:200]}" for e in errors[:10]]
@@ -176,13 +206,22 @@ def _records(workdir: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _fsync_dir(directory: Path) -> None:
+    """Make a rename or a name's presence durable: until the directory is synced, a crash can lose the new name."""
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _write_checked(doc: dict[str, Any], final: Path, schema: dict[str, Any]) -> None:
     """Validate, write to a .part file, sync, rename, read back and validate the file itself."""
     validate_transcript(doc, schema)
     part = final.with_name(final.name + ".part")
     try:
         with part.open("w") as fh:
-            json.dump(doc, fh, indent=1)
+            json.dump(doc, fh, indent=1, allow_nan=False)
             fh.write("\n")
             fh.flush()
             os.fsync(fh.fileno())
@@ -191,16 +230,19 @@ def _write_checked(doc: dict[str, Any], final: Path, schema: dict[str, Any]) -> 
         part.unlink(missing_ok=True)
         raise
     try:
-        validate_transcript(json.loads(final.read_text()), schema)
+        validate_transcript(read_transcript_file(final), schema)
+        _fsync_dir(final.parent)
     except BaseException:
         final.unlink(missing_ok=True)
         raise
 
 
-def run_transcribe(event_ids: Sequence[str], workdir: Path, engine: Engine, *, schema: dict[str, Any] | None = None) -> list[str]:
+def run_transcribe(event_ids: Sequence[str], workdir: Path, engine: Engine, *, schema: dict[str, Any] | None = None,
+                   clock: Clock | None = None) -> list[str]:
     """Transcribe each event's MP3 (all fetched events that still have one when no ids are given). Returns the ids
     transcribed in this run. The first failure raises; events done before it stay done."""
     schema = schema or load_vendored_schema()
+    clock = clock or SystemClock()
     for event_id in event_ids:
         if not event_id.isdigit():
             raise ValueError(f"event ID {event_id!r} is not digits only")
@@ -226,14 +268,14 @@ def run_transcribe(event_ids: Sequence[str], workdir: Path, engine: Engine, *, s
             "event_id": event_id,
             "audio": {"sha256": sha256, "duration_seconds": result.duration},
             "model": {"id": engine.model_id, "settings": engine.settings},
-            "made_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "made_at": clock.now().astimezone(timezone.utc).isoformat(timespec="seconds"),
             "segments": map_segments(result.segments),
         }
         try:
             _write_checked(doc, final, schema)
         except TranscriptInvalid as err:
             raise TranscriptInvalid(f"event {event_id}: {err}; nothing was written and the MP3 is kept") from None
-        mp3.unlink()  # only after the file is written and validated
+        mp3.unlink()  # only after the file is written, validated and its directory entry synced
         done.append(event_id)
     return done
 
@@ -243,11 +285,14 @@ def _finish_interrupted(event_id: str, mp3: Path, final: Path, schema: dict[str,
     file validates and names this MP3's hash; never overwrite a transcript."""
     if not mp3.exists():
         return
-    doc = json.loads(final.read_text())
     try:
+        doc = read_transcript_file(final)
         validate_transcript(doc, schema)
+        if doc["event_id"] != event_id:
+            raise TranscriptInvalid(f"it is for event {doc['event_id']!r}, not {event_id!r}")
     except TranscriptInvalid as err:
         raise TranscriptInvalid(f"event {event_id}: the existing {final.name} is not valid ({err}); the MP3 is kept") from None
     if doc["audio"]["sha256"] != _sha256(mp3):
         raise ValueError(f"{final.name} was made from different audio than {mp3.name}; both kept")
+    _fsync_dir(final.parent)  # the transcript's name is durable before its audio goes
     mp3.unlink()
