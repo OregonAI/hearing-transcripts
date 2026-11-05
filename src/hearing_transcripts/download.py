@@ -14,14 +14,20 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 from .clock import Clock
 
 USER_AGENT = "SessionGateway-transcripts/1 (+https://github.com/OregonAI/SessionGateway)"
 RECORD_FILE = "fetched.jsonl"
 TIMEOUT_SECONDS = 120
+PACE_SECONDS = 3.0
+PACIFIC = ZoneInfo("America/Los_Angeles")
+WINDOW_START_HOUR = 0  # 00:00 Pacific, inclusive
+WINDOW_END_HOUR = 6  # 06:00 Pacific, exclusive
 
 
 class Halt(Exception):
@@ -47,12 +53,40 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_NoRedirect)
 
 
-def _request(req: urllib.request.Request, what: str) -> tuple[int, bytes]:
+def _check_window(clock: Clock) -> None:
+    hour = clock.now().astimezone(PACIFIC).hour
+    if not WINDOW_START_HOUR <= hour < WINDOW_END_HOUR:
+        raise OutsideWindow("the downloader runs only between 00:00 and 06:00 Pacific; refusing to continue")
+
+
+class _Pacer:
+    """Keeps requests about PACE_SECONDS apart and inside the window. Called before every request."""
+
+    def __init__(self, clock: Clock) -> None:
+        self.clock = clock
+        self.last: datetime | None = None
+
+    def before_request(self) -> None:
+        if self.last is not None:
+            wait = PACE_SECONDS - (self.clock.now() - self.last).total_seconds()
+            if wait > 0:
+                self.clock.sleep(wait)
+        _check_window(self.clock)  # after the wait, so a run never sends a request outside the window
+
+    def after_request(self) -> None:
+        self.last = self.clock.now()
+
+
+def _request(req: urllib.request.Request, what: str, pacer: _Pacer) -> tuple[int, bytes]:
     """One request. Any answer that is not a 200 halts; there is no retry."""
+    pacer.before_request()
     req.add_header("User-Agent", USER_AGENT)
     try:
-        with _opener.open(req, timeout=TIMEOUT_SECONDS) as resp:
-            status, body = resp.status, resp.read()
+        try:
+            with _opener.open(req, timeout=TIMEOUT_SECONDS) as resp:
+                status, body = resp.status, resp.read()
+        finally:
+            pacer.after_request()
     except urllib.error.HTTPError as err:
         raise Halt(f"{what}: the server answered {err.code}; halting, no retry") from None
     except (urllib.error.URLError, TimeoutError, OSError) as err:
@@ -62,7 +96,7 @@ def _request(req: urllib.request.Request, what: str) -> tuple[int, bytes]:
     return status, body
 
 
-def _audio_url(event_id: str, config: Config) -> str:
+def _audio_url(event_id: str, config: Config, pacer: _Pacer) -> str:
     payload = {
         "clientID": config.client_id,
         "eventID": event_id,
@@ -78,7 +112,7 @@ def _audio_url(event_id: str, config: Config) -> str:
             "wsc-api-key": config.api_key,
         },
     )
-    _, body = _request(req, f"event {event_id} getDetailed")
+    _, body = _request(req, f"event {event_id} getDetailed", pacer)
     try:
         url = json.loads(body)["data"]["downloadLinks"]["audioDownloadURI"]
     except (ValueError, KeyError, TypeError):
@@ -98,6 +132,8 @@ def _fetched_ids(record: Path) -> set[str]:
 
 def run_download(event_ids: list[str], config: Config, workdir: Path, clock: Clock) -> list[str]:
     """Fetch each event's MP3 once. Returns the ids fetched in this run."""
+    _check_window(clock)  # refuse to start outside the window
+    pacer = _Pacer(clock)
     workdir.mkdir(parents=True, exist_ok=True)
     record = workdir / RECORD_FILE
     done = _fetched_ids(record)
@@ -105,8 +141,8 @@ def run_download(event_ids: list[str], config: Config, workdir: Path, clock: Clo
     for event_id in event_ids:
         if event_id in done:
             continue
-        url = _audio_url(event_id, config)
-        _, audio = _request(urllib.request.Request(url, method="GET"), f"event {event_id} MP3")
+        url = _audio_url(event_id, config, pacer)
+        _, audio = _request(urllib.request.Request(url, method="GET"), f"event {event_id} MP3", pacer)
         (workdir / f"{event_id}.mp3").write_bytes(audio)
         entry = {"event_id": event_id, "sha256": hashlib.sha256(audio).hexdigest(), "bytes": len(audio)}
         with record.open("a") as fh:
