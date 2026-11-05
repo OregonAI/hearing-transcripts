@@ -7,6 +7,10 @@ import pytest
 
 from fake_invintus import FakeInvintus
 
+class NetworkBlocked(RuntimeError):
+    """A test tried to reach a non-loopback address."""
+
+
 PACIFIC = ZoneInfo("America/Los_Angeles")
 DUMMY_KEY = "dummy-key-not-a-real-credential"
 
