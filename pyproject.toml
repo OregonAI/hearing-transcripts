@@ -9,6 +9,8 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "faster-whisper>=1.2.1",
     "jsonschema>=4.26.0",
+    # faster-whisper 1.2.1 passes metadata_errors to av.open, which av 19 rejects; its own pin has no upper bound.
+    "av>=11,<19",
 ]
 
 [project.scripts]
