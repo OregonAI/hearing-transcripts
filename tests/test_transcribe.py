@@ -222,3 +222,16 @@ def test_a_crash_after_the_write_is_finished_by_deleting_the_mp3_without_transcr
 
     assert done == [] and engine.calls == []
     assert not (workdir / "2026010001.mp3").exists()
+
+
+# -- the GPU path without its wheels -------------------------------------------------------------------------------
+
+def test_cuda_without_the_wheels_exits_7_naming_the_extra_and_keeps_the_mp3(tmp_path, capsys, monkeypatch):
+    workdir = make_workdir(tmp_path)
+    monkeypatch.setitem(__import__("sys").modules, "nvidia", None)  # as if `uv sync --extra gpu` was never run
+
+    code = main(["transcribe", "--workdir", str(workdir), "--model", MODEL, "--device", "cuda", "2026010001"])
+
+    assert code == 7
+    assert "--extra gpu" in capsys.readouterr().err
+    assert (workdir / "2026010001.mp3").exists()
