@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/OregonAI/SessionGateway/main/docs/schemas/transcript-v1.schema.json",
+  "title": "SessionGateway transcript file, format version 1",
+  "type": "object",
+  "properties": {
+    "format_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "The version of this format. It only increases."
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The Invintus event ID of the Meeting's recording, as the Recording Log's player link gives it."
+    },
+    "audio": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the audio file that was transcribed, as 64 lower-case hex digits."
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Length of the audio in seconds."
+        }
+      },
+      "required": [
+        "sha256",
+        "duration_seconds"
+      ],
+      "additionalProperties": false,
+      "description": "The audio that was transcribed. The audio itself is never kept."
+    },
+    "model": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifies the model weights used (name and revision)."
+        },
+        "settings": {
+          "type": "object",
+          "properties": {
+            "model_name": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The faster-whisper model name, such as small.en."
+            },
+            "device": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The device it ran on, such as cpu or cuda."
+            },
+            "compute_type": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The compute type, such as int8 or float16."
+            },
+            "language": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The language the model was told to expect, such as en."
+            },
+            "beam_size": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The beam size."
+            }
+          },
+          "required": [
+            "model_name",
+            "device",
+            "compute_type",
+            "language",
+            "beam_size"
+          ],
+          "additionalProperties": false,
+          "description": "The settings the model ran with."
+        }
+      },
+      "required": [
+        "id",
+        "settings"
+      ],
+      "additionalProperties": false,
+      "description": "The model that made the transcript."
+    },
+    "made_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "When the transcript was made, as an ISO 8601 time with its offset."
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Second of the audio at which the segment starts."
+          },
+          "end": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Second of the audio at which the segment ends."
+          },
+          "text": {
+            "type": "string",
+            "description": "The segment's text."
+          },
+          "avg_logprob": {
+            "description": "faster-whisper's avg_logprob for the segment: the mean log probability of its tokens.",
+            "type": "number"
+          },
+          "compression_ratio": {
+            "description": "faster-whisper's compression_ratio for the segment: its text's length over its zlib-compressed length.",
+            "type": "number",
+            "minimum": 0
+          },
+          "no_speech_prob": {
+            "description": "faster-whisper's no_speech_prob for the segment: the chance the stretch holds no speech.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "temperature": {
+            "description": "faster-whisper's temperature for the segment: the sampling temperature that produced its text.",
+            "type": "number",
+            "minimum": 0
+          },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Second of the audio at which the word starts."
+                },
+                "end": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Second of the audio at which the word ends."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The word as the model wrote it, with any leading space and punctuation it carries."
+                },
+                "probability": {
+                  "description": "The model's probability for the word, when it gives one.",
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "text"
+              ],
+              "additionalProperties": false,
+              "description": "One word with its timing."
+            },
+            "description": "The segment's words in order. May be empty when the model gave none."
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "text",
+          "words"
+        ],
+        "additionalProperties": false,
+        "description": "One stretch of speech the model wrote as a unit."
+      },
+      "description": "The transcript, in the order of the audio."
+    }
+  },
+  "required": [
+    "format_version",
+    "event_id",
+    "audio",
+    "model",
+    "made_at",
+    "segments"
+  ],
+  "additionalProperties": false,
+  "description": "One Meeting's machine transcript: the contract between the transcription tool and SessionGateway."
+}

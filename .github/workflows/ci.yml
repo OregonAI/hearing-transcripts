@@ -22,8 +22,17 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-      # The only network use is installing dependencies. The tests talk to a local fake server; no GPU.
+      # The only network use is setup: installing dependencies and downloading the model. The tests talk to a local
+      # fake server and run the cached tiny.en model on CPU; no GPU, no network.
       - run: uv sync --locked
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: model-cache
+        with:
+          path: ~/.cache/huggingface
+          key: hf-faster-whisper-tiny.en-v1
+      - name: Download the test model (setup, not a test)
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: uv run python -c "from faster_whisper.utils import download_model; print(download_model('tiny.en'))"
       # No proxy may carry anything, and conftest.py blocks every connect but 127.0.0.1 and ::1.
       # Unset in the shell, not under env: Actions treats env keys case-insensitively, so
       # http_proxy and HTTP_PROXY there are one key defined twice and the workflow is invalid.

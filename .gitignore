@@ -11,3 +11,5 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 dist/
+# The one audio file allowed: a synthetic-speech test clip, not Legislature audio (tests/fixtures/README.md).
+!tests/fixtures/tts-fixture.mp3
